@@ -1,0 +1,14 @@
+ImageId: vemlp-cn-beijing.cr.volces.com/preset-images/slurm:0.7.0
+ResourceQueueId: q-*********-46pr8
+Framework: Custom
+TaskRoleSpecs:
+  - RoleName: worker
+    RoleReplicas: 2
+    ResourceSpecID: ml.xni3.5xlarge
+Storages:
+  - Type: Vepfs
+    MountPath: /target/path
+    VepfsName: vepfs_name
+    VepfsId: vepfs-*********
+    SubPath: **********
+    ReadOnly: true
