@@ -1,0 +1,5 @@
+git+https://github.com/GCS-ZHN/pyslurm.git@main
+git+https://github.com/volcengine/ml-platform-sdk-python@main
+case-convert
+pyyaml
+pandas

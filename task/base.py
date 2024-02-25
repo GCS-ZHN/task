@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
+from functools import wraps
 import time
 import pandas as pd
 
@@ -143,3 +144,30 @@ class TaskManager(ABC):
         for task_id in list_of_tasks.index:
             task_status[task_id] = self.wait(task_id, timeout)
         return task_status
+
+
+def retry(func):
+    """
+    A decorator for retrying a function.
+
+    Parameters
+    ----------
+    func : function
+        The function to be retried.
+
+    Returns
+    ----------
+    function
+        The decorated function.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        error = None
+        for i in range(3):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                time.sleep(1)
+                error = e
+        raise error
+    return wrapper
