@@ -2,9 +2,9 @@
 
 This is distributed simple task manager on Linux, support multiple backends
 
-- [-] Volcengine based on [official sdk](https://github.com/volcengine/ml-platform-sdk-python/)
-- [-] Slurm cluster based on [pyslurm](https://github.com/PySlurm/pyslurm)
-- [] multiprocess python library (TODO)
+- [x] Volcengine based on [official sdk](https://github.com/volcengine/ml-platform-sdk-python/)
+- [x] Slurm cluster based on [pyslurm](https://github.com/PySlurm/pyslurm)
+- [ ] multiprocess python library (TODO)
 
 ## Installment
 Clone current repo and execute following command
