@@ -1,0 +1,35 @@
+[build-system]
+requires = [
+    "setuptools>=42",
+    "versioneer[toml]"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "task"
+authors = [
+    {name="Zhang.H.N", email="zhang.h.n@foxmail.com"}
+]
+description = "A simple python package for task manager"
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Linux"
+]
+license = {text = "MIT"}
+requires-python = ">=3.6"
+dynamic = ["version"]
+dependencies = [
+    "case-convert",
+    "pyyaml",
+    "pandas"
+]
+
+[tool.versioneer]
+VCS = "git"
+style = "pep440"
+versionfile_source = "task/_version.py"
+versionfile_build = "task/_version.py"
+tag_prefix = "v"
+parentdir_prefix = "task-"

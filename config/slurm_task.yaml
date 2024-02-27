@@ -1,4 +1,4 @@
-partitions: xhhgnormal
+partitions: gpu
 gres_per_node:
   gpu: 1
 threads_per_core: 1

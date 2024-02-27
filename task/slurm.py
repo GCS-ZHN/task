@@ -1,8 +1,14 @@
 from task.base import TaskManager, TaskStatus, retry
 
 import pandas as pd
-import pyslurm
+import warnings
+try:
+    import pyslurm
+except ImportError:
+    warnings.warn("pyslurm is not installed. SlurmTaskManager will not be available.")
+    pyslurm = None
 import yaml
+import time
 import tempfile
 
 from pathlib import Path
@@ -29,20 +35,42 @@ class SlurmTaskManager(TaskManager):
         'CANCELLED': TaskStatus.CANCELLED
     }
 
-    def __init__(self):
+    def __init__(self, config_file: Path):
+        if pyslurm is None:
+            raise ImportError("pyslurm is not installed.")
         self._task_list = []
-        self._config = yaml.safe_load(open('config/slurm_task.yaml'))
+        self._config = yaml.safe_load(open(config_file))
 
-    def submit(self, name: str, entrypoint_path: str, **config) -> str:
-        config.update(self._config)
+    def submit(self, name: str, entrypoint_path: str, dependencies: dict = None, **config) -> str:
+        _config = self._config.copy()
+        _config.update(config)
         desc = pyslurm.JobSubmitDescription(
             name=name,
             script=wrapper_command_as_script(entrypoint_path),
-            **config
+            dependencies=dependencies,
+            # kill options to avoid hanging jobs in the queue
+            kill_on_invalid_dependency=True,
+            kill_on_node_fail=True,
+            **_config
         )
         desc.load_sbatch_options()
         task_id = desc.submit()
         task_id = str(task_id)
+        flag = 3
+        while flag > 0:
+            try:
+                self.status(task_id)
+                break
+            except pyslurm.core.error.RPCError as e:
+                # job maybe not synced to the database yet
+                if str(e).startswith(f'Job {task_id} does not exist'):
+                    time.sleep(0.5)
+                    flag -= 1
+                    if flag == 0:
+                        raise e
+                    continue
+                raise e
+
         self._task_list.append({
             'task_id': task_id,
             'name': name,
@@ -64,7 +92,12 @@ class SlurmTaskManager(TaskManager):
         return task_list
 
     def cancel(self, task_id: str) -> bool:
-        return pyslurm.Job(int(task_id)).cancel()
+        try:
+            pyslurm.Job(int(task_id)).cancel()
+            return True
+        except Exception as e:
+            self.log(e, level='ERROR')
+            return False
 
     def query(self, task_id: str) -> dict:
         job = pyslurm.db.Job.load(int(task_id))
