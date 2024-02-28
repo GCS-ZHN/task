@@ -15,6 +15,15 @@ class Base(object):
             TaskStatus.PENDING, TaskStatus.RUNNING]
         assert self.task_manager.wait(task_id) == TaskStatus.COMPLETED
 
+    def test_submit_script(self):
+        task_id = self.task_manager.submit(
+            name="test_submit_script",
+            entrypoint_path="test/test_script.sh",
+        )
+        assert task_id is not None
+        assert self.task_manager.status(task_id) in [
+            TaskStatus.PENDING, TaskStatus.RUNNING]
+        assert self.task_manager.wait(task_id) == TaskStatus.COMPLETED
 
     def test_cancel_task(self):
         task_id = self.task_manager.submit(

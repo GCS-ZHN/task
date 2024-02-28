@@ -1,15 +1,20 @@
 from typing import Iterable
 import yaml
+import tos
 import pandas as pd
 import case_convert
 import time
 import random
+import json
 
+
+from io import StringIO
 from volcengine_ml_platform.openapi import custom_task_client
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from pathlib import Path
 from .base import TaskManager, TaskStatus
+from .utils import sha256sum, sha256sum_str
 
 
 class VolcengineMLTaskManager(TaskManager):
@@ -51,9 +56,18 @@ class VolcengineMLTaskManager(TaskManager):
     }
 
     def __init__(self, config_file: Path):
-        self.task_client = custom_task_client.CustomTaskClient()
+        self._task_client = custom_task_client.CustomTaskClient()
+        self._credentials = self._task_client.service_info.credentials
+        self._tos_client = tos.TosClientV2(
+            ak=self._credentials.ak,
+            sk=self._credentials.sk,
+            endpoint=f'tos-{self._credentials.region}.volces.com',
+            region=self._credentials.region
+        )
         _config = yaml.safe_load(open(config_file))
         self._config = {case_convert.snake_case(k): v for k, v in _config.items()}
+        self._bucket_name = self._config['bucket']
+        del self._config['bucket']
         self._task_list = []
         # pending tasks due to dependencies
         self._pendding_tasks = set()
@@ -79,6 +93,63 @@ class VolcengineMLTaskManager(TaskManager):
             The unique task ID.
         """
         return time.strftime("%Y%m%d-%H%M%S-") + f'{random.randint(0, 9999):04}'
+    
+    def _wrap_entrypoint(self, entrypoint_path: str):
+        """
+        Wrap the script to tos.
+
+        Parameters
+        ----------
+        entrypoint_path: str
+            The path of the script.
+            If not exists, return the original path.
+            (regard as command)
+        Returns
+        ----------
+        dict
+            Wrappered config
+        """
+        entrypoint_path_obj = Path(entrypoint_path)
+        if not entrypoint_path_obj.is_file():
+            return {
+                "entrypoint_path": entrypoint_path
+            }
+        stored_key = sha256sum(entrypoint_path_obj)
+        tos_bucket = f'tos://{self._bucket_name}'
+        tos_dir = 'scripts'
+        manifest = {
+            "Version":"1.0",
+            "RemoteRootPath":tos_bucket + '/' + tos_dir,
+            "LocalRootPath":".",
+            "AuthorID":"",
+            "MetaInfos":[
+                {
+                    "Path":entrypoint_path_obj.name,
+                    "StoredKey":stored_key,
+                    "Size":entrypoint_path_obj.stat().st_size,
+                    "PermissionMask":484,
+                    "IsDir":False,
+                    "SoftLink":False,
+                    "LinkPath":""
+                }]}
+        manifest_content_str = json.dumps(manifest)
+        manifest_snapshot_id = sha256sum_str(manifest_content_str)
+        manifest_tos_key = f'{tos_dir}/manifest/{manifest_snapshot_id}.manifest'
+        self._tos_client.put_object_from_file(
+            self._bucket_name,
+            f'{tos_dir}/{stored_key}',
+            entrypoint_path
+        )
+        self._tos_client.put_object(
+            self._bucket_name,
+            manifest_tos_key,
+            content=StringIO(manifest_content_str)
+        )
+        return {
+            "entrypoint_path": '/tmp/code/' + entrypoint_path_obj.name,
+             "tos_code_path": tos_bucket + '/' + manifest_tos_key,
+            'local_code_path': '/tmp/code'
+        }
 
     def _async_submit(
             self, 
@@ -130,10 +201,10 @@ class VolcengineMLTaskManager(TaskManager):
                 return
             _config = self._config.copy()
             _config.update(config)
+            _config.update(self._wrap_entrypoint(entrypoint_path))
             try:
-                status = self.task_client.create_custom_task(
-                    name=name,
-                    entrypoint_path=entrypoint_path,
+                status = self._task_client.create_custom_task(
+                    name=name + '_' + task_id,
                     **_config
                 )
                 real_task_id = status['Result']['Id']
@@ -172,7 +243,7 @@ class VolcengineMLTaskManager(TaskManager):
                     return False
                 
                 real_task_id = self._task_id_map.get(task_id)
-                status = self.task_client.stop_custom_task(
+                status = self._task_client.stop_custom_task(
                     task_id=real_task_id
                 )
                 return status['Result']['Id'] == real_task_id
@@ -197,7 +268,7 @@ class VolcengineMLTaskManager(TaskManager):
                 return {
                     'State': 'Failed'
                 }
-            return self.task_client.get_custom_task(
+            return self._task_client.get_custom_task(
                 task_id=self._task_id_map[task_id]
             )['Result']
 
@@ -208,7 +279,7 @@ class VolcengineMLTaskManager(TaskManager):
             status, TaskStatus.UNKNOWN)
 
     def list(self) -> pd.DataFrame:
-        status = self.task_client.list_custom_tasks()
+        status = self._task_client.list_custom_tasks()
         status = pd.DataFrame(status['Result']['List'])
         status.rename(columns=case_convert.snake_case, inplace=True)
         status.set_index('id', inplace=True)

@@ -23,7 +23,8 @@ dynamic = ["version"]
 dependencies = [
     "case-convert",
     "pyyaml",
-    "pandas"
+    "pandas",
+    "tos"
 ]
 
 [tool.versioneer]
