@@ -18,7 +18,7 @@ command if you want use slurm as backend.
 
 Some necessary configuration is required for different backends.
 
-1. For slurm
+1. For pyslurm
 General config yaml example. Actually you can config all at sbatch script
 ```yaml
 partitions: gpu
@@ -27,8 +27,16 @@ gres_per_node:
 threads_per_core: 1
 
 ```
+2. For slurm-cli
+General config yaml example. Actually you can config all at sbatch script
+```yaml
+partition: cpu
+gres: gpu:1
+threads_per_core: 1
 
-2. For volcengine
+```
+
+3. For volcengine
 First we need generate an access key and sercet key on [VolcEngine control panel](https://console.volcengine.com/iam/keymanage/).
 Set them as ENV
 ```bash
