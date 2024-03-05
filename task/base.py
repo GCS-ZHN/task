@@ -4,7 +4,6 @@ import logging
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from functools import wraps
 from typing import Tuple
 from pathlib import Path
 
@@ -179,30 +178,3 @@ class TaskManager(ABC):
         level = logging._nameToLevel.get(level, logging.INFO)
         logger = logging.getLogger(__name__)
         logger.log(level, msg)
-
-
-def retry(func):
-    """
-    A decorator for retrying a function.
-
-    Parameters
-    ----------
-    func : function
-        The function to be retried.
-
-    Returns
-    ----------
-    function
-        The decorated function.
-    """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        error = None
-        for i in range(3):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                time.sleep(1)
-                error = e
-        raise error
-    return wrapper
