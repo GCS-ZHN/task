@@ -1,6 +1,9 @@
 from .test_base import Base
 
-from task.slurm import SlurmTaskManager
+from task.slurm import PySlurmTaskManager, CliSlurmTaskManager
 
-class TestSlurm(Base):
-    task_manager = SlurmTaskManager('config/slurm_task.yaml')
+class TestPySlurm(Base):
+    task_manager = PySlurmTaskManager('config/pyslurm_task.yaml')
+
+class TestCliSlurm(Base):
+    task_manager = CliSlurmTaskManager('config/clislurm_task.yaml')
