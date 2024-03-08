@@ -81,6 +81,7 @@ class VolcengineMLTaskManager(TaskManager):
             max_workers=20,
             thread_name_prefix="volcengine-mltask-submit-")
         self._task_id_map = {}
+        self._hash_tag = self._unique_task_id()
 
     def _unique_task_id(self):
         """
@@ -204,7 +205,7 @@ class VolcengineMLTaskManager(TaskManager):
             _config.update(self._wrap_entrypoint(entrypoint_path))
             try:
                 status = self._task_client.create_custom_task(
-                    name=name + '_' + task_id,
+                    name=name + '_' + task_id + '_' + self._hash_tag,
                     **_config
                 )
                 real_task_id = status['Result']['Id']
@@ -279,10 +280,14 @@ class VolcengineMLTaskManager(TaskManager):
             status, TaskStatus.UNKNOWN)
 
     def list(self) -> pd.DataFrame:
-        status = self._task_client.list_custom_tasks()
+        status = self._task_client.list_custom_tasks(
+            task_filter=self._hash_tag,
+            limit=len(self._task_id_map)
+        )
         status = pd.DataFrame(status['Result']['List'])
         status.rename(columns=case_convert.snake_case, inplace=True)
-        status.set_index('id', inplace=True)
+        if len(status) != 0:
+            status.set_index('id', inplace=True)
         task_list = pd.DataFrame(self._task_list, columns=['task_id', 'name', 'entrypoint_path'])
         task_list.set_index('task_id', inplace=True)
         task_list['status'] = task_list.index.map(
