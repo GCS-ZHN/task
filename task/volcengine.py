@@ -11,7 +11,7 @@ import json
 from io import StringIO
 from volcengine_ml_platform.openapi import custom_task_client
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
+from threading import RLock
 from pathlib import Path
 from .base import TaskManager, TaskStatus
 from .utils import sha256sum, sha256sum_str
@@ -76,12 +76,40 @@ class VolcengineMLTaskManager(TaskManager):
         # tasks failed to submit
         self._submit_error_tasks = set()
         # atomic lock for pendding and submit
-        self._atomic_lock = Lock()
+        self._atomic_lock = RLock()
         self._submit_executor = ThreadPoolExecutor(
             max_workers=20,
             thread_name_prefix="volcengine-mltask-submit-")
+        # virtural ID Mapping
         self._task_id_map = {}
+        # Hash tag for current mananager
         self._hash_tag = self._unique_task_id()
+        # max submited real running/pendding tasks
+        self._max_real_submited_tasks = 500
+
+    def _aqcuire_real_submited_lock(self, task_id: str):
+        """
+        Return when the real submited tasks number is under the limit of max_real_submited_tasks
+        or the task is cancelled.
+        """
+        while True:
+            # atomic should not include the sleep
+            with self._atomic_lock:
+                if task_id not in self._pendding_tasks:
+                    return
+                task_status_list = self.list()
+                submited_real_tasks = task_status_list[
+                    task_status_list.index.isin(self._task_id_map.keys())]
+                submited_real_tasks_not_exit = submited_real_tasks[
+                    submited_real_tasks['status'].isin([TaskStatus.PENDING, TaskStatus.RUNNING])]
+                current_count = len(submited_real_tasks_not_exit)
+                if current_count < self._max_real_submited_tasks:
+                    return
+            self.log(
+                f'Current real submited tasks {current_count} is over the limit {self._max_real_submited_tasks}, waiting for some tasks to finish',
+                level='DEBUG')
+            time.sleep(5)
+
 
     def _unique_task_id(self):
         """
@@ -185,6 +213,9 @@ class VolcengineMLTaskManager(TaskManager):
                 
                 if not should_submit:
                     break
+        
+        # wait if real submited tasks is over the limit
+        self._aqcuire_real_submited_lock(task_id)
 
         # make sure atomicity
         with self._atomic_lock:
@@ -278,13 +309,23 @@ class VolcengineMLTaskManager(TaskManager):
         status = task_info['State']
         return self._status_map.get(
             status, TaskStatus.UNKNOWN)
+    
+    def _list_custom_tasks(self, limit: int = 100) -> pd.DataFrame:
+        offset = 0
+        total_list = []
+        while True:
+            res_list = self._task_client.list_custom_tasks(
+                task_filter=self._hash_tag,
+                offset=offset,
+                limit=limit
+            )['Result']['List']
+            total_list.extend(res_list)
+            if len(res_list) < limit:
+                break
+        return pd.DataFrame(total_list)
 
     def list(self) -> pd.DataFrame:
-        status = self._task_client.list_custom_tasks(
-            task_filter=self._hash_tag,
-            limit=len(self._task_id_map)
-        )
-        status = pd.DataFrame(status['Result']['List'])
+        status = self._list_custom_tasks()
         status.rename(columns=case_convert.snake_case, inplace=True)
         if len(status) != 0:
             status.set_index('id', inplace=True)
