@@ -72,6 +72,16 @@ class Base(object):
                 TaskStatus.RUNNING, TaskStatus.FAILED]
         assert self.task_manager.wait(task_id2) == TaskStatus.CANCELLED
 
+    def test_linked_deps(self):
+        for i in range(30):
+          task_id = self.task_manager.submit(
+            name="test_linked_deps-{}".format(i),
+            entrypoint_path="nvidia-smi; sleep 5; echo ok",
+            dependencies = {"afterok": task_id} if i > 0 else None
+            )
+        all_status = self.task_manager.list()['status']==TaskStatus.RUNNING
+        assert all_status.sum() <= 1
+        # self.task_manager.wait(task_id)
 
     def test_depes_afternotok_1(self):
         task_id1 = self.task_manager.submit(
@@ -133,3 +143,13 @@ class Base(object):
         assert final_task_id is not None
         assert self.task_manager.wait(
             final_task_id) == TaskStatus.COMPLETED
+    
+    def test_many_tasks(self):
+        for i in range(200):
+            task_id = self.task_manager.submit(
+                name="test_many_tasks-{}".format(i),
+                entrypoint_path="nvidia-smi; sleep 5; echo ok",
+            )
+        self.task_manager.wait_all()
+        task_list = self.task_manager.list()
+        assert task_list['status'].isin([TaskStatus.COMPLETED]).all()
