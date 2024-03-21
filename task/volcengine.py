@@ -11,7 +11,7 @@ import json
 from io import StringIO
 from volcengine_ml_platform.openapi import custom_task_client
 from concurrent.futures import ThreadPoolExecutor
-from threading import RLock
+from threading import RLock, Thread
 from pathlib import Path
 from .base import TaskManager, TaskStatus
 from .utils import sha256sum, sha256sum_str
@@ -77,15 +77,38 @@ class VolcengineMLTaskManager(TaskManager):
         self._submit_error_tasks = set()
         # atomic lock for pendding and submit
         self._atomic_lock = RLock()
+       # Hash tag for current mananager
+        self._hash_tag = self._unique_task_id()
         self._submit_executor = ThreadPoolExecutor(
             max_workers=20,
-            thread_name_prefix="volcengine-mltask-submit-")
+            thread_name_prefix=f"volcengine-mltask-submit-{self._hash_tag}-")
         # virtural ID Mapping
         self._task_id_map = {}
-        # Hash tag for current mananager
-        self._hash_tag = self._unique_task_id()
         # max submited real running/pendding tasks
         self._max_real_submited_tasks = 500
+        # watch thread for task
+        def _watch():
+            while True:
+                with self._atomic_lock:
+                    info = {
+                        'total': len(self._task_list),
+                        'pending': len(self._pendding_tasks),
+                        'pending_cancel': len(self._pendding_cancelled_tasks),
+                        'submit_error': len(self._submit_error_tasks),
+                        'submited': len(self._task_id_map)
+                    }
+                    msg = ' '.join(f'{k}:{v}' for k, v in info.items())
+                    if info['total'] > 0:
+                        self.log(msg, level='DEBUG')
+                time.sleep(10)
+
+        _watch_thread = Thread(
+            name='volcengine-mltask-watch-' + self._hash_tag,
+            target=_watch,
+            daemon=True
+        )
+        _watch_thread.start()
+
 
     def _aqcuire_real_submited_lock(self, task_id: str):
         """
@@ -109,7 +132,6 @@ class VolcengineMLTaskManager(TaskManager):
                 f'Current real submited tasks {current_count} is over the limit {self._max_real_submited_tasks}, waiting for some tasks to finish',
                 level='DEBUG')
             time.sleep(5)
-
 
     def _unique_task_id(self):
         """
@@ -209,7 +231,7 @@ class VolcengineMLTaskManager(TaskManager):
                     self.log(
                         f'Task {dep_task_ids} are at {statuses}, waiting for {condition} to submit task {task_id}',
                         level='DEBUG')
-                    time.sleep(1)
+                    time.sleep(2)
                 
                 if not should_submit:
                     break
@@ -219,6 +241,7 @@ class VolcengineMLTaskManager(TaskManager):
 
         # make sure atomicity
         with self._atomic_lock:
+
             if task_id in self._pendding_tasks:
                 self._pendding_tasks.remove(task_id)
             # Canceled before submited
@@ -262,6 +285,10 @@ class VolcengineMLTaskManager(TaskManager):
 
     def cancel(self, task_id: str) -> bool:
         try:
+            self.log(
+                f'Cancel task {task_id}',
+                level='DEBUG'
+            )
             # make sure atomicity
             with self._atomic_lock:
                 if task_id in self._pendding_tasks:
@@ -322,21 +349,26 @@ class VolcengineMLTaskManager(TaskManager):
             total_list.extend(res_list)
             if len(res_list) < limit:
                 break
+            time.sleep(0.5)
+            offset += limit
         return pd.DataFrame(total_list)
 
     def list(self) -> pd.DataFrame:
-        status = self._list_custom_tasks()
-        status.rename(columns=case_convert.snake_case, inplace=True)
-        if len(status) != 0:
-            status.set_index('id', inplace=True)
-        task_list = pd.DataFrame(self._task_list, columns=['task_id', 'name', 'entrypoint_path'])
-        task_list.set_index('task_id', inplace=True)
-        task_list['status'] = task_list.index.map(
-            lambda x: self._status_map.get(
-                status.loc[self._task_id_map[x], 'state'], 
-                TaskStatus.UNKNOWN) if x in self._task_id_map else self.status(x))
-        return task_list
+        # make sure atomicity
+        with self._atomic_lock:
+            status = self._list_custom_tasks()
+            status.rename(columns=case_convert.snake_case, inplace=True)
+            if len(status) != 0:
+                status.set_index('id', inplace=True)
+            task_list = pd.DataFrame(self._task_list, columns=['task_id', 'name', 'entrypoint_path'])
+            task_list.set_index('task_id', inplace=True)
+            task_list['status'] = task_list.index.map(
+                lambda x: self._status_map.get(
+                    status.loc[self._task_id_map[x], 'state'], 
+                    TaskStatus.UNKNOWN) if x in self._task_id_map else self.status(x))
+            return task_list
 
-    def __del__(self):
-        self._submit_executor.shutdown(wait=False)
-        self.log('VolcengineMLTaskManager is shutdown', level='DEBUG')
+    def close(self):
+        if hasattr(self, '_submit_executor'):
+            super().close()
+            self._submit_executor.shutdown(wait=False)

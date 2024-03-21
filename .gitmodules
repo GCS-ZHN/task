@@ -1,0 +1,3 @@
+[submodule "ml-platform-sdk-python"]
+	path = ml-platform-sdk-python
+	url = https://github.com/GCS-ZHN/ml-platform-sdk-python

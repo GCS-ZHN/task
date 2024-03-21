@@ -1,10 +1,11 @@
+import signal
 import time
 import pandas as pd
 import logging
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Tuple
+from typing import Tuple, List
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -27,9 +28,16 @@ class TaskManager(ABC):
     config_file : Path
         The path to the configuration file.
     """
+    _instances: List['TaskManager'] = []
+
     @abstractmethod
     def __init__(self, config_file: Path) -> None:
         raise NotImplementedError
+
+    def __new__(cls, *args, **kwargs) -> 'TaskManager':
+        self = super().__new__(cls)
+        cls._instances.append(self)
+        return self
 
     @abstractmethod
     def submit(self, name: str, entrypoint_path:str, dependencies: dict = None, **config) -> str:
@@ -178,3 +186,45 @@ class TaskManager(ABC):
         level = logging._nameToLevel.get(level, logging.INFO)
         logger = logging.getLogger(__name__)
         logger.log(level, msg)
+
+    def close(self) -> bool:
+        """
+        Close the task manager.
+        """
+        try:
+            if getattr(self, '_closed', False):
+                return True
+            for task_id, row in self.list().iterrows():
+                if row['status'] in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                    self.cancel(task_id)
+            self._closed = True
+            return True
+        except:
+            return False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+        return False
+
+_sinint_flag = False
+
+def _sigint_handler(signum, frame):
+    global _sinint_flag
+    if not _sinint_flag:
+        print('Press Ctrl+C again to exit.')
+        _sinint_flag = True
+        return
+
+    for idx, task_manager in enumerate(TaskManager._instances):
+        if idx == 0:
+            task_manager.log('Try to stop unfinished task, please wait in a minutes')
+        task_manager.close()
+        task_manager.log(f'{task_manager} closed.')
+        TaskManager._instances.pop(idx)
+
+    raise KeyboardInterrupt
+
+signal.signal(signal.SIGINT, _sigint_handler)
