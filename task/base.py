@@ -210,21 +210,28 @@ class TaskManager(ABC):
         return False
 
 _sinint_flag = False
+_tmp_logger = logging.getLogger(__name__)
 
-def _sigint_handler(signum, frame):
-    global _sinint_flag
-    if not _sinint_flag:
-        print('Press Ctrl+C again to exit.')
-        _sinint_flag = True
-        return
-
+def _close():
+    _tmp_logger.info('Closing all task managers...')
     for idx, task_manager in enumerate(TaskManager._instances):
-        if idx == 0:
-            task_manager.log('Try to stop unfinished task, please wait in a minutes')
         task_manager.close()
         task_manager.log(f'{task_manager} closed.')
         TaskManager._instances.pop(idx)
 
+def _sigint_handler(signum, frame):
+    global _sinint_flag
+    if not _sinint_flag:
+        _tmp_logger.info('Press Ctrl+C again to exit.')
+        _sinint_flag = True
+        return
+    _close()
     raise KeyboardInterrupt
 
+def _sigterm_handler(signum, frame):
+    _tmp_logger.info('Received SIGTERM signal.')
+    _close()
+    raise SystemExit(0)
+
 signal.signal(signal.SIGINT, _sigint_handler)
+signal.signal(signal.SIGTERM, _sigterm_handler)
