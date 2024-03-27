@@ -80,7 +80,7 @@ class VolcengineMLTaskManager(TaskManager):
        # Hash tag for current mananager
         self._hash_tag = self._unique_task_id()
         self._submit_executor = ThreadPoolExecutor(
-            max_workers=20,
+            max_workers=64,
             thread_name_prefix=f"volcengine-mltask-submit-{self._hash_tag}-")
         # virtural ID Mapping
         self._task_id_map = {}
@@ -109,6 +109,28 @@ class VolcengineMLTaskManager(TaskManager):
         )
         _watch_thread.start()
 
+        # sync task info from remote
+        self._sync_info = None
+        self.list()
+        def _sync():
+            while True:
+                with self._atomic_lock:
+                    self.list()
+                    statistics = self._sync_info['status'].value_counts().to_dict()
+                    statistics = ' '.join(f'{k}:{v}' for k, v in statistics.items())
+                    self.log(
+                        f'Sync remote task info: {statistics}',
+                        level='DEBUG'
+                    )
+                time.sleep(20)
+        
+        _sync_thread = Thread(
+            name='volcengine-mltask-sync-' + self._hash_tag,
+            target=_sync,
+            daemon=True
+        )
+        _sync_thread.start()
+
 
     def _aqcuire_real_submited_lock(self, task_id: str):
         """
@@ -120,7 +142,9 @@ class VolcengineMLTaskManager(TaskManager):
             with self._atomic_lock:
                 if task_id not in self._pendding_tasks:
                     return
-                task_status_list = self.list()
+                if len(self._task_id_map) < self._max_real_submited_tasks:
+                    return
+                task_status_list = self._sync_info
                 submited_real_tasks = task_status_list[
                     task_status_list.index.isin(self._task_id_map.keys())]
                 submited_real_tasks_not_exit = submited_real_tasks[
@@ -349,7 +373,7 @@ class VolcengineMLTaskManager(TaskManager):
             total_list.extend(res_list)
             if len(res_list) < limit:
                 break
-            time.sleep(0.5)
+            time.sleep(0.1)
             offset += limit
         return pd.DataFrame(total_list)
 
@@ -366,6 +390,7 @@ class VolcengineMLTaskManager(TaskManager):
                 lambda x: self._status_map.get(
                     status.loc[self._task_id_map[x], 'state'], 
                     TaskStatus.UNKNOWN) if x in self._task_id_map else self.status(x))
+            self._sync_info = task_list
             return task_list
 
     def close(self):
