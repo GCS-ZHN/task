@@ -243,7 +243,7 @@ class VolcengineMLTaskManager(TaskManager):
                 if task_id not in self._pendding_tasks:
                     should_submit = False
                 else: 
-                    statuses = [self.status(dep_task_id) for dep_task_id in dep_task_ids]
+                    statuses = [self._sync_info['status'][dep_task_id] for dep_task_id in dep_task_ids]
                     if all(status in cond_map['start'] for status in statuses):
                         should_submit = True
                     elif any(status in cond_map['stop'] for status in statuses):
