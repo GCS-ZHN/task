@@ -145,11 +145,14 @@ class Base(object):
             final_task_id) == TaskStatus.COMPLETED
     
     def test_many_tasks(self):
+        ids = []
         for i in range(200):
             task_id = self.task_manager.submit(
                 name="test_many_tasks-{}".format(i),
                 entrypoint_path="nvidia-smi; sleep 5; echo ok",
             )
+            ids.append(task_id)
         self.task_manager.wait_all()
         task_list = self.task_manager.list()
+        task_list = task_list.loc[ids]
         assert task_list['status'].isin([TaskStatus.COMPLETED]).all()
