@@ -239,25 +239,28 @@ class VolcengineMLTaskManager(TaskManager):
                 if not isinstance(dep_task_ids, Iterable):
                     raise ValueError(
                         f"dependencies should be an iterable or str, but got {type(dep_task_ids)}")
-                while True:
-                   # task cancelled during waiting
-                    if task_id not in self._pendding_tasks:
-                        should_submit = False
-                        break
+                should_wait = False
+                if task_id not in self._pendding_tasks:
+                    should_submit = False
+                else: 
                     statuses = [self.status(dep_task_id) for dep_task_id in dep_task_ids]
                     if all(status in cond_map['start'] for status in statuses):
                         should_submit = True
-                        break
-                    if any(status in cond_map['stop'] for status in statuses):
+                    elif any(status in cond_map['stop'] for status in statuses):
                         should_submit = False
-                        break
-
-                    self.log(
-                        f'Task {dep_task_ids} are at {statuses}, waiting for {condition} to submit task {task_id}',
-                        level='DEBUG')
-                    time.sleep(2)
-                
-                if not should_submit:
+                    else:
+                        should_wait = True
+                if should_submit:
+                    if should_wait:
+                        self.log(
+                            f'Task {dep_task_ids} are at {statuses}, waiting for {condition} to submit task {task_id}',
+                            level='DEBUG')
+                        time.sleep(5)
+                        self._submit_executor.submit(
+                            self._async_submit, task_id, name, entrypoint_path, dependencies, **config
+                        )
+                        return
+                else:
                     break
         
         # wait if real submited tasks is over the limit
