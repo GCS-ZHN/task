@@ -184,7 +184,7 @@ class TaskManager(ABC):
             The level of the message.
         """
         level = logging._nameToLevel.get(level, logging.INFO)
-        logger = logging.getLogger(__name__)
+        logger = logging.getLogger(self.__class__.__name__)
         logger.log(level, msg)
 
     def close(self) -> bool:
