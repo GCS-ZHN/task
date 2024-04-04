@@ -68,7 +68,8 @@ class VolcengineMLTaskManager(TaskManager):
         self._config = {case_convert.snake_case(k): v for k, v in _config.items()}
         self._bucket_name = self._config['bucket']
         del self._config['bucket']
-        self._task_list = []
+        self._task_list = pd.DataFrame(columns=['task_id', 'name', 'entrypoint_path', 'status', 'dependencies'])
+        self._task_list.set_index('task_id', inplace=True)
         # pending tasks due to dependencies
         self._pendding_tasks = set()
         # cancelled pending tasks due to dependencies will not be satisfied or cancelled manually
@@ -79,6 +80,7 @@ class VolcengineMLTaskManager(TaskManager):
         self._atomic_lock = RLock()
        # Hash tag for current mananager
         self._hash_tag = self._unique_task_id()
+        self.log(f'Task manager {self._hash_tag} created')
         self._submit_executor = ThreadPoolExecutor(
             max_workers=64,
             thread_name_prefix=f"volcengine-mltask-submit-{self._hash_tag}-")
@@ -110,18 +112,18 @@ class VolcengineMLTaskManager(TaskManager):
         _watch_thread.start()
 
         # sync task info from remote
-        self._sync_info = None
         self.list()
         def _sync():
             while True:
                 with self._atomic_lock:
                     self.list()
-                    statistics = self._sync_info['status'].value_counts().to_dict()
+                    statistics = self._task_list['status'].value_counts().to_dict()
                     statistics = ' '.join(f'{k}:{v}' for k, v in statistics.items())
                     self.log(
                         f'Sync remote task info: {statistics}',
                         level='DEBUG'
                     )
+                    self._task_list.to_csv(f'/tmp/task_{self._hash_tag}.csv')
                 time.sleep(20)
         
         _sync_thread = Thread(
@@ -144,7 +146,7 @@ class VolcengineMLTaskManager(TaskManager):
                     return
                 if len(self._task_id_map) < self._max_real_submited_tasks:
                     return
-                task_status_list = self._sync_info
+                task_status_list = self._task_list
                 submited_real_tasks = task_status_list[
                     task_status_list.index.isin(self._task_id_map.keys())]
                 submited_real_tasks_not_exit = submited_real_tasks[
@@ -230,81 +232,88 @@ class VolcengineMLTaskManager(TaskManager):
             self, 
             task_id: str,
             name: str, entrypoint_path: str, dependencies: dict = None, **config):
-        should_submit = True
-        if dependencies is not None and len(dependencies) > 0:
-            for condition, dep_task_ids in dependencies.items():
-                cond_map = self._dependency_status_map.get(condition)
-                if isinstance(dep_task_ids, str):
-                    dep_task_ids = [dep_task_ids]
-                if not isinstance(dep_task_ids, Iterable):
-                    raise ValueError(
-                        f"dependencies should be an iterable or str, but got {type(dep_task_ids)}")
-                should_wait = False
-                if task_id not in self._pendding_tasks:
-                    should_submit = False
-                else: 
-                    statuses = [self._sync_info['status'][dep_task_id] for dep_task_id in dep_task_ids]
-                    if all(status in cond_map['start'] for status in statuses):
-                        should_submit = True
-                    elif any(status in cond_map['stop'] for status in statuses):
+        # exception must be manunal catched, otherwise the exception only raised when get the future results!!!
+        try:
+            self.log(f'Task {name} [{task_id}] added to queue', level='DEBUG')
+            should_submit = True
+            if dependencies is not None and len(dependencies) > 0:
+                for condition, dep_task_ids in dependencies.items():
+                    cond_map = self._dependency_status_map.get(condition)
+                    if isinstance(dep_task_ids, str):
+                        dep_task_ids = [dep_task_ids]
+                    if not isinstance(dep_task_ids, Iterable):
+                        raise ValueError(
+                            f"dependencies should be an iterable or str, but got {type(dep_task_ids)}")
+                    should_wait = False
+                    if task_id not in self._pendding_tasks:
                         should_submit = False
+                    else: 
+                        statuses = [self._task_list['status'][dep_task_id] for dep_task_id in dep_task_ids]
+                        if all(status in cond_map['start'] for status in statuses):
+                            should_submit = True
+                        elif any(status in cond_map['stop'] for status in statuses):
+                            should_submit = False
+                        else:
+                            should_wait = True
+                    if should_submit:
+                        if should_wait:
+                            self.log(
+                                f'Task {dep_task_ids} are at {statuses}, waiting for {condition} to submit task {task_id}',
+                                level='DEBUG')
+                            time.sleep(5)
+                            self._submit_executor.submit(
+                                self._async_submit, task_id, name, entrypoint_path, dependencies, **config
+                            )
+                            return
                     else:
-                        should_wait = True
-                if should_submit:
-                    if should_wait:
-                        self.log(
-                            f'Task {dep_task_ids} are at {statuses}, waiting for {condition} to submit task {task_id}',
-                            level='DEBUG')
-                        time.sleep(5)
-                        self._submit_executor.submit(
-                            self._async_submit, task_id, name, entrypoint_path, dependencies, **config
-                        )
-                        return
+                        break
+            
+            # wait if real submited tasks is over the limit
+            self.log(f'Checking max-limitation for {task_id}', level='DEBUG')
+            self._aqcuire_real_submited_lock(task_id)
+            self.log(f'Checking should submit for {task_id}', level='DEBUG')
+            # make sure atomicity
+            with self._atomic_lock:
+
+                if task_id in self._pendding_tasks:
+                    self._pendding_tasks.remove(task_id)
+                # Canceled before submited
                 else:
-                    break
-        
-        # wait if real submited tasks is over the limit
-        self._aqcuire_real_submited_lock(task_id)
-
-        # make sure atomicity
-        with self._atomic_lock:
-
-            if task_id in self._pendding_tasks:
-                self._pendding_tasks.remove(task_id)
-            # Canceled before submited
-            else:
-                should_submit = False
-            if not should_submit:
-                self.log(
-                    f'Task {task_id} has been cancelled due to dependencies not satisfied or manually cancelled before submitting',
-                    level='DEBUG'
-                )
-                self._pendding_cancelled_tasks.add(task_id)
-                return
-            _config = self._config.copy()
-            _config.update(config)
-            _config.update(self._wrap_entrypoint(entrypoint_path))
-            try:
+                    should_submit = False
+                if not should_submit:
+                    self.log(
+                        f'Task {task_id} has been cancelled due to dependencies not satisfied or manually cancelled before submitting',
+                        level='DEBUG'
+                    )
+                    self._pendding_cancelled_tasks.add(task_id)
+                    return
+                _config = self._config.copy()
+                _config.update(config)
+                _config.update(self._wrap_entrypoint(entrypoint_path))
                 status = self._task_client.create_custom_task(
                     name=name + '_' + task_id + '_' + self._hash_tag,
                     **_config
                 )
                 real_task_id = status['Result']['Id']
                 self._task_id_map[task_id] = real_task_id
-            except Exception as e:
-                self._submit_error_tasks.add(task_id)
-                self.log(
-                    f'Failed to submit task {task_id}: {e}',
-                    level='ERROR')
+                self.log(f'Submit {task_id} really with real id {real_task_id}', level='DEBUG')
+        except Exception as e:
+            if isinstance(e, RuntimeError) and str(e).startswith('cannot schedule new futures after'):
+                return
+            self._submit_error_tasks.add(task_id)
+            self.log(
+                f'Failed to submit task {task_id}: {e.__class__.__name__} [{e}]',
+                level='ERROR', exc_info=True)
 
     def submit(self, name: str, entrypoint_path:str, dependencies: dict = None, **config) -> str:
         task_id = self._unique_task_id()
         with self._atomic_lock:
             self._pendding_tasks.add(task_id)
-            self._task_list.append({
-                    "task_id": task_id,
+            self._task_list.loc[task_id]=pd.Series({
                     "name": name,
-                    "entrypoint_path": entrypoint_path
+                    "entrypoint_path": entrypoint_path,
+                    "status": TaskStatus.PENDING,
+                    "dependencies": json.dumps(dependencies)
                 })
         self._submit_executor.submit(
             self._async_submit, task_id, name, entrypoint_path, dependencies, **config)
@@ -387,14 +396,11 @@ class VolcengineMLTaskManager(TaskManager):
             status.rename(columns=case_convert.snake_case, inplace=True)
             if len(status) != 0:
                 status.set_index('id', inplace=True)
-            task_list = pd.DataFrame(self._task_list, columns=['task_id', 'name', 'entrypoint_path'])
-            task_list.set_index('task_id', inplace=True)
-            task_list['status'] = task_list.index.map(
+            self._task_list['status'] = self._task_list.index.map(
                 lambda x: self._status_map.get(
                     status.loc[self._task_id_map[x], 'state'], 
                     TaskStatus.UNKNOWN) if x in self._task_id_map else self.status(x))
-            self._sync_info = task_list
-            return task_list
+            return self._task_list.copy()
 
     def close(self):
         if hasattr(self, '_submit_executor'):

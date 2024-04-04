@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Tuple, List
 from pathlib import Path
 
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 class TaskStatus(Enum):
@@ -148,7 +149,7 @@ class TaskManager(ABC):
             if 0 < timeout < time.time() - start_time:
                 return status
             if status in waiting_status:
-                time.sleep(1)
+                time.sleep(5)
                 continue
             return status
 
@@ -172,7 +173,7 @@ class TaskManager(ABC):
             task_status[task_id] = self.wait(task_id, timeout)
         return task_status
     
-    def log(self, msg: str, level: str = 'INFO'):
+    def log(self, msg: str, level: str = 'INFO', *args, **kwargs):
         """
         Log a message.
 
@@ -185,7 +186,7 @@ class TaskManager(ABC):
         """
         level = logging._nameToLevel.get(level, logging.INFO)
         logger = logging.getLogger(self.__class__.__name__)
-        logger.log(level, msg)
+        logger.log(level, msg, *args, **kwargs)
 
     def close(self) -> bool:
         """
