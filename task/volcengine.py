@@ -115,15 +115,14 @@ class VolcengineMLTaskManager(TaskManager):
         self.list()
         def _sync():
             while True:
-                with self._atomic_lock:
-                    self.list()
-                    statistics = self._task_list['status'].value_counts().to_dict()
-                    statistics = ' '.join(f'{k}:{v}' for k, v in statistics.items())
-                    self.log(
-                        f'Sync remote task info: {statistics}',
-                        level='DEBUG'
-                    )
-                    self._task_list.to_csv(f'/tmp/task_{self._hash_tag}.csv')
+                self.list()
+                statistics = self._task_list['status'].value_counts().to_dict()
+                statistics = ' '.join(f'{k}:{v}' for k, v in statistics.items())
+                self.log(
+                    f'Sync remote task info: {statistics}',
+                    level='DEBUG'
+                )
+                self._task_list.to_csv(f'/tmp/task_{self._hash_tag}.csv')
                 time.sleep(20)
         
         _sync_thread = Thread(
@@ -390,15 +389,19 @@ class VolcengineMLTaskManager(TaskManager):
         return pd.DataFrame(total_list)
 
     def list(self) -> pd.DataFrame:
+        # time cost if many task so not lock to avoid block submit
+        status = self._list_custom_tasks()
+        status.rename(columns=case_convert.snake_case, inplace=True)
+        if len(status) != 0:
+            status.set_index('id', inplace=True)
+            status_dict = status['state'].to_dict()
+        else:
+            status_dict = dict()
         # make sure atomicity
         with self._atomic_lock:
-            status = self._list_custom_tasks()
-            status.rename(columns=case_convert.snake_case, inplace=True)
-            if len(status) != 0:
-                status.set_index('id', inplace=True)
             self._task_list['status'] = self._task_list.index.map(
                 lambda x: self._status_map.get(
-                    status.loc[self._task_id_map[x], 'state'], 
+                    status_dict.get(self._task_id_map[x], 'Queue'), 
                     TaskStatus.UNKNOWN) if x in self._task_id_map else self.status(x))
             return self._task_list.copy()
 
