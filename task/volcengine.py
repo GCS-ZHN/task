@@ -7,14 +7,14 @@ import time
 import random
 import json
 
-
 from io import StringIO
 from volcengine_ml_platform.openapi import custom_task_client
 from concurrent.futures import ThreadPoolExecutor
-from threading import RLock, Thread
+from threading import RLock, Thread, current_thread
 from pathlib import Path
 from .base import TaskManager, TaskStatus
 from .utils import sha256sum, sha256sum_str
+from contextlib import contextmanager
 
 
 class VolcengineMLTaskManager(TaskManager):
@@ -82,16 +82,16 @@ class VolcengineMLTaskManager(TaskManager):
         self._hash_tag = self._unique_task_id()
         self.log(f'Task manager {self._hash_tag} created')
         self._submit_executor = ThreadPoolExecutor(
-            max_workers=64,
+            max_workers=1,
             thread_name_prefix=f"volcengine-mltask-submit-{self._hash_tag}-")
         # virtural ID Mapping
         self._task_id_map = {}
         # max submited real running/pendding tasks
-        self._max_real_submited_tasks = 500
+        self._max_real_submited_tasks = 320
         # watch thread for task
         def _watch():
             while True:
-                with self._atomic_lock:
+                with self.synchronize():
                     info = {
                         'total': len(self._task_list),
                         'pending': len(self._pendding_tasks),
@@ -132,31 +132,35 @@ class VolcengineMLTaskManager(TaskManager):
         )
         _sync_thread.start()
 
+    
+    @contextmanager
+    def synchronize(self, timeout: int = 60):
+        thread_name = current_thread().name
+        self.log(f'{thread_name} is tring to acquire lock', 'DEBUG')
+        if self._atomic_lock.acquire(timeout=timeout):
+            self.log(f'{thread_name} acquired the lock', 'DEBUG')
+            yield
+            self._atomic_lock.release()
+            self.log(f'{thread_name} released the lock', 'DEBUG')
+        else:
+            raise RuntimeError(f'{thread_name} could not acquire the lock')
 
-    def _aqcuire_real_submited_lock(self, task_id: str):
+
+    def _aqcuire_real_submited_lock(self, task_id: str) -> bool:
         """
         Return when the real submited tasks number is under the limit of max_real_submited_tasks
         or the task is cancelled.
         """
-        while True:
-            # atomic should not include the sleep
-            with self._atomic_lock:
-                if task_id not in self._pendding_tasks:
-                    return
-                if len(self._task_id_map) < self._max_real_submited_tasks:
-                    return
-                task_status_list = self._task_list
-                submited_real_tasks = task_status_list[
-                    task_status_list.index.isin(self._task_id_map.keys())]
-                submited_real_tasks_not_exit = submited_real_tasks[
-                    submited_real_tasks['status'].isin([TaskStatus.PENDING, TaskStatus.RUNNING])]
-                current_count = len(submited_real_tasks_not_exit)
-                if current_count < self._max_real_submited_tasks:
-                    return
-            self.log(
-                f'Current real submited tasks {current_count} is over the limit {self._max_real_submited_tasks}, waiting for some tasks to finish',
-                level='DEBUG')
-            time.sleep(5)
+        if len(self._task_id_map) < self._max_real_submited_tasks:
+            return True
+        task_status_list = self._task_list
+        submited_real_tasks = task_status_list[
+            task_status_list.index.isin(self._task_id_map.keys())]
+        submited_real_tasks_not_exit = submited_real_tasks[
+            submited_real_tasks['status'].isin([TaskStatus.PENDING, TaskStatus.RUNNING])]
+        current_count = len(submited_real_tasks_not_exit)
+        return current_count < self._max_real_submited_tasks
+        
 
     def _unique_task_id(self):
         """
@@ -269,11 +273,19 @@ class VolcengineMLTaskManager(TaskManager):
             
             # wait if real submited tasks is over the limit
             self.log(f'Checking max-limitation for {task_id}', level='DEBUG')
-            self._aqcuire_real_submited_lock(task_id)
+            if not self._aqcuire_real_submited_lock(task_id):
+                self.log(
+                    f'Current real submited tasks is over the limit {self._max_real_submited_tasks}, waiting for some tasks to finish',
+                    level='DEBUG')
+                time.sleep(5)
+                self._submit_executor.submit(
+                    self._async_submit, task_id, name, entrypoint_path, dependencies, **config
+                )
+                return
+
             self.log(f'Checking should submit for {task_id}', level='DEBUG')
             # make sure atomicity
-            with self._atomic_lock:
-
+            with self.synchronize():
                 if task_id in self._pendding_tasks:
                     self._pendding_tasks.remove(task_id)
                 # Canceled before submited
@@ -306,7 +318,7 @@ class VolcengineMLTaskManager(TaskManager):
 
     def submit(self, name: str, entrypoint_path:str, dependencies: dict = None, **config) -> str:
         task_id = self._unique_task_id()
-        with self._atomic_lock:
+        with self.synchronize():
             self._pendding_tasks.add(task_id)
             self._task_list.loc[task_id]=pd.Series({
                     "name": name,
@@ -314,6 +326,7 @@ class VolcengineMLTaskManager(TaskManager):
                     "status": TaskStatus.PENDING,
                     "dependencies": json.dumps(dependencies)
                 })
+            # print(self._task_list)
         self._submit_executor.submit(
             self._async_submit, task_id, name, entrypoint_path, dependencies, **config)
         return task_id
@@ -325,7 +338,7 @@ class VolcengineMLTaskManager(TaskManager):
                 level='DEBUG'
             )
             # make sure atomicity
-            with self._atomic_lock:
+            with self.synchronize():
                 if task_id in self._pendding_tasks:
                     self._pendding_tasks.remove(task_id)
                     self._pendding_cancelled_tasks.add(task_id)
@@ -349,7 +362,7 @@ class VolcengineMLTaskManager(TaskManager):
 
     def query(self, task_id: str) -> dict:
         # make sure atomicity
-        with self._atomic_lock:
+        with self.synchronize():
             if task_id in self._pendding_tasks:
                 return {
                     'State': 'Queue'
@@ -398,7 +411,7 @@ class VolcengineMLTaskManager(TaskManager):
         else:
             status_dict = dict()
         # make sure atomicity
-        with self._atomic_lock:
+        with self.synchronize():
             self._task_list['status'] = self._task_list.index.map(
                 lambda x: self._status_map.get(
                     status_dict.get(self._task_id_map[x], 'Queue'), 
