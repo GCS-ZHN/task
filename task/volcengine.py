@@ -83,7 +83,7 @@ class VolcengineMLTaskManager(TaskManager):
         self.log(f'Task manager {self._hash_tag} created')
         self._submit_executor = ThreadPoolExecutor(
             max_workers=1,
-            thread_name_prefix=f"volcengine-mltask-submit-{self._hash_tag}-")
+            thread_name_prefix=f"volcengine-mltask-submit-{self._hash_tag}")
         # virtural ID Mapping
         self._task_id_map = {}
         # max submited real running/pendding tasks
@@ -132,7 +132,6 @@ class VolcengineMLTaskManager(TaskManager):
         )
         _sync_thread.start()
 
-    
     @contextmanager
     def synchronize(self, timeout: int = 60):
         thread_name = current_thread().name
@@ -144,7 +143,6 @@ class VolcengineMLTaskManager(TaskManager):
             self.log(f'{thread_name} released the lock', 'DEBUG')
         else:
             raise RuntimeError(f'{thread_name} could not acquire the lock')
-
 
     def _aqcuire_real_submited_lock(self, task_id: str) -> bool:
         """
@@ -160,7 +158,6 @@ class VolcengineMLTaskManager(TaskManager):
             submited_real_tasks['status'].isin([TaskStatus.PENDING, TaskStatus.RUNNING])]
         current_count = len(submited_real_tasks_not_exit)
         return current_count < self._max_real_submited_tasks
-        
 
     def _unique_task_id(self):
         """
@@ -302,7 +299,7 @@ class VolcengineMLTaskManager(TaskManager):
                 _config.update(config)
                 _config.update(self._wrap_entrypoint(entrypoint_path))
                 status = self._task_client.create_custom_task(
-                    name=name + '_' + task_id + '_' + self._hash_tag,
+                    name='_'.join((self._hash_tag, name, task_id)),
                     **_config
                 )
                 real_task_id = status['Result']['Id']
@@ -388,6 +385,7 @@ class VolcengineMLTaskManager(TaskManager):
     def _list_custom_tasks(self, limit: int = 100) -> pd.DataFrame:
         offset = 0
         total_list = []
+        real_task_ids = list(self._task_id_map.values())
         while True:
             res_list = self._task_client.list_custom_tasks(
                 task_filter=self._hash_tag,
@@ -399,12 +397,17 @@ class VolcengineMLTaskManager(TaskManager):
                 break
             time.sleep(0.1)
             offset += limit
-        return pd.DataFrame(total_list)
+        total_list = pd.DataFrame(total_list)
+        total_list.rename(columns=case_convert.snake_case, inplace=True)
+        # check if all real tasks are in the total list
+        for task_id in real_task_ids:
+            if task_id not in total_list['id'].values:
+                raise KeyError(f'Task {task_id} not in queried list')
+        return total_list
 
     def list(self) -> pd.DataFrame:
         # time cost if many task so not lock to avoid block submit
         status = self._list_custom_tasks()
-        status.rename(columns=case_convert.snake_case, inplace=True)
         if len(status) != 0:
             status.set_index('id', inplace=True)
             status_dict = status['state'].to_dict()

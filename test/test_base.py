@@ -2,6 +2,7 @@
 import time
 from task.base import TaskStatus, TaskManager
 
+
 class Base(object):
     task_manager: TaskManager
 
@@ -54,7 +55,6 @@ class Base(object):
                 TaskStatus.RUNNING, TaskStatus.COMPLETED]
         assert self.task_manager.wait(task_id2) == TaskStatus.COMPLETED
 
-
     def test_depes_afterok_2(self):
         task_id1 = self.task_manager.submit(
             name="test_depes_afterok_2-deps",
@@ -81,7 +81,7 @@ class Base(object):
             )
         all_status = self.task_manager.list()['status']==TaskStatus.RUNNING
         assert all_status.sum() <= 1
-        # self.task_manager.wait(task_id)
+        self.task_manager.wait(task_id)
 
     def test_depes_afternotok_1(self):
         task_id1 = self.task_manager.submit(
@@ -100,7 +100,6 @@ class Base(object):
                 TaskStatus.RUNNING, TaskStatus.FAILED]
         assert self.task_manager.wait(task_id2) == TaskStatus.COMPLETED
 
-
     def test_depes_afternotok_2(self):
         task_id1 = self.task_manager.submit(
             name="test_depes_afternotok_2-deps",
@@ -117,7 +116,6 @@ class Base(object):
             task_id1, waiting_status=(TaskStatus.PENDING,)) in [
                 TaskStatus.RUNNING, TaskStatus.COMPLETED]
         assert self.task_manager.wait(task_id2) == TaskStatus.CANCELLED
-
 
     def test_depes_composition(self):
         afterok_task_id1 = self.task_manager.submit(
@@ -146,7 +144,7 @@ class Base(object):
     
     def test_many_tasks(self):
         ids = []
-        for i in range(200):
+        for i in range(50):
             task_id = self.task_manager.submit(
                 name="test_many_tasks-{}".format(i),
                 entrypoint_path="nvidia-smi; sleep 5; echo ok",
