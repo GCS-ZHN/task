@@ -5,6 +5,7 @@
         "--log-cli-format=%(asctime)s [%(levelname)s] %(message)s",
         "--log-cli-date-format=%Y-%m-%d %H:%M:%S",
         "--log-file=logs/pytest.log",
+        "--ignore=ml-platform-sdk-python",
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true
