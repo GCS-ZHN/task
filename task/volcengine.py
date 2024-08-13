@@ -87,7 +87,7 @@ class VolcengineMLTaskManager(TaskManager):
         # virtural ID Mapping
         self._task_id_map = {}
         # max submited real running/pendding tasks
-        self._max_real_submited_tasks = 320
+        self._max_real_submited_tasks = 64
         # watch thread for task
         def _watch():
             while True:
